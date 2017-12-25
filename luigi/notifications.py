@@ -31,6 +31,8 @@ import logging
 import socket
 import sys
 import textwrap
+import requests
+import json
 
 import luigi.task
 import luigi.parameter
@@ -61,7 +63,6 @@ class TestNotificationsTask(luigi.task.Task):
             raise ValueError('Testing notifications triggering')
         return False
 
-
 class email(luigi.Config):
     force_send = luigi.parameter.BoolParameter(
         default=False,
@@ -72,9 +73,9 @@ class email(luigi.Config):
         choices=('plain', 'html', 'none'),
         description='Format type for sent e-mails')
     method = luigi.parameter.ChoiceParameter(
-        default='smtp',
+        default='dingding',
         config_path=dict(section='email', name='type'),
-        choices=('smtp', 'sendgrid', 'ses', 'sns'),
+        choices=('smtp', 'sendgrid', 'ses', 'sns', 'dingding'),
         description='Method for sending e-mail')
     prefix = luigi.parameter.Parameter(
         default='',
@@ -125,6 +126,13 @@ class smtp(luigi.Config):
         description='Username used to log in to the SMTP host')
 
 
+class dingding(luigi.Config):
+    dingding_bot_token = luigi.parameter.Parameter(
+        default=None,
+        config_path=dict(section='email', name='dingding_bot_token'),
+        description=u'钉钉报警机器人token')
+
+
 class sendgrid(luigi.Config):
     username = luigi.parameter.Parameter(
         config_path=dict(section='email', name='SENDGRID_USERNAME'),
@@ -152,7 +160,16 @@ def generate_email(sender, subject, message, recipients, image_png):
     msg_root['Subject'] = subject
     msg_root['From'] = sender
     msg_root['To'] = ','.join(recipients)
+    return msg_root
 
+
+def generate_dingding_message(subject, message):
+    msg_root = {
+        "msgtype": "text",
+        "text": {
+            "content": subject+'\n'+ message
+        }
+    }
     return msg_root
 
 
@@ -250,6 +267,13 @@ def send_email_sendgrid(sender, subject, message, recipients, image_png):
     client.send(to_send)
 
 
+def send_dingding_message(sender, subject, message, recipients, image_png):
+    for bot in recipients:
+        requests.post(bot,
+                      data=json.dumps(generate_dingding_message(subject, message)),
+                      headers={'Content-Type': 'application/json'})
+
+
 def _email_disabled_reason():
     if email().format == 'none':
         return "email format is 'none'"
@@ -300,6 +324,7 @@ def send_email(subject, message, sender, recipients, image_png=None):
         'sendgrid': send_email_sendgrid,
         'smtp': send_email_smtp,
         'sns': send_email_sns,
+        'dingding': send_dingding_message,
     }
 
     subject = _prefix(subject)
@@ -319,7 +344,6 @@ def send_email(subject, message, sender, recipients, image_png=None):
 
     # Replace original recipients with the clean list
     recipients = recipients_tmp
-
     logger.info("Sending email to %r", recipients)
 
     # Get appropriate sender and call it to send the notification
